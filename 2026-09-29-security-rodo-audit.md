@@ -25,6 +25,15 @@ Ocena RODO jest nierówna. Trippics i Mata24 mają techniczne endpointy eksportu
 | Info | 1 |
 | **Razem** | **18** |
 
+### Status remediacji (aktualizowane na bieżąco - szczegóły w sekcji 13)
+
+| ID | Status | Data |
+|---|---|---|
+| MAT-SUP-001 | ✅ Naprawione (dumpy usunięte z repo i całej historii Git na wszystkich branchach, force-push; `.gitignore` zablokowany) | 2026-09-30 |
+| SHR-K8S-001 | 🟡 Częściowo (automount tokenu ServiceAccount wyłączony na wszystkich workloadach; pełny `securityContext` non-root w toku) | 2026-09-30 |
+| TRI-SEC-001 | ✅ Naprawione (Facebook signup już nie wysyła hasła mailem - losowe, nigdzie nieujawniane hasło jak przy Google; zbudowane i wdrożone) | 2026-09-30 |
+| SHR-K8S-002 | ✅ Naprawione dla namespace'ów w zakresie audytu (`trippics`, `mata24`, `sandbox`/yalquo) - default-deny + allow-list `NetworkPolicy` per-appka, zweryfikowane świeżymi połączeniami | 2026-09-30 |
+
 ## 2. Zakres i metodologia
 
 ### Repozytoria
@@ -107,6 +116,7 @@ Legenda: ✅ wykonane, ◐ częściowe, ❌ niewykonane / brak bezpiecznego dowo
 - **Rozwiązanie:** natychmiast ograniczyć dostęp, uruchomić procedurę incydentową, unieważnić wszystkie potencjalnie dotknięte tokeny/klucze, ustalić zakres osób i danych, usunąć dumpy z całej historii Git po koordynacji z użytkownikami repo, przechowywać backupy wyłącznie szyfrowane poza SCM; dodać pre-receive/secret scanning.
 - **Właściciel:** Security/Incident Response + Data Protection + Backend/Platform.
 - **Termin:** natychmiast, triage ≤24 h; pełna remediacja ≤7 dni.
+- **Status realizacji:** ✅ Naprawione 2026-09-30 - szczegóły w sekcji 13.
 
 ### SHR-K8S-001 — niepełny hardening podów i automatyczne tokeny ServiceAccount
 
@@ -118,6 +128,7 @@ Legenda: ✅ wykonane, ◐ częściowe, ❌ niewykonane / brak bezpiecznego dowo
 - **Rozwiązanie:** oddzielny minimalny ServiceAccount albo `automountServiceAccountToken: false`; pod/container security context z non-root, RuntimeDefault, drop ALL, no privilege escalation i read-only root filesystem po testach kompatybilności; egzekwować Pod Security Admission `restricted`.
 - **Właściciel:** Platform/Kubernetes + zespoły aplikacyjne.
 - **Termin:** 7 dni dla tokenów, 30 dni dla pełnego hardeningu.
+- **Status realizacji:** 🟡 Część 1 (automount tokenu) naprawiona 2026-09-30 - szczegóły w sekcji 13. Część 2 (securityContext) w toku.
 
 ### SHR-K8S-002 — brak NetworkPolicy
 
@@ -129,6 +140,7 @@ Legenda: ✅ wykonane, ◐ częściowe, ❌ niewykonane / brak bezpiecznego dowo
 - **Rozwiązanie:** default-deny ingress/egress, następnie allow-list DNS, ingress controller, wymagane bazy/cache/object storage i jawnie uzasadnione wyjścia internetowe.
 - **Właściciel:** Platform/Kubernetes.
 - **Termin:** projekt ≤7 dni, wdrożenie ≤30 dni.
+- **Status realizacji:** ✅ Naprawione 2026-09-30 dla wszystkich stałych workloadów w audytowanych namespace'ach (`trippics`, `mata24`, `sandbox`) - szczegóły w sekcji 13.
 
 ### TRI-SEC-001 — przesyłanie tymczasowego hasła e-mailem
 
@@ -140,6 +152,7 @@ Legenda: ✅ wykonane, ◐ częściowe, ❌ niewykonane / brak bezpiecznego dowo
 - **Rozwiązanie:** nie wysyłać haseł; użyć jednorazowego, krótkotrwałego, zahashowanego tokenu „ustaw hasło”, z unieważnieniem po użyciu i rate limitingiem.
 - **Właściciel:** Trippics Backend/Auth.
 - **Termin:** ≤7 dni.
+- **Status realizacji:** ✅ Naprawione 2026-09-30 - szczegóły w sekcji 13.
 
 ### MAT-RODO-001 — raporty awarii mogą utrwalać PII i sekrety
 
@@ -504,3 +517,39 @@ Pozostaje do zrobienia (poza zakresem tej naprawy):
 - Poprawka: dodano brakujący egress `trippics-frontend` → `trippics-backend:8080` oraz brakujący ingress `trippics-backend` ← pod `trippics-frontend`. Zastosowano najpierw bezpośrednio na klastrze (`kubectl apply`) żeby jak najszybciej przywrócić serwis, równolegle wypchnięte do gita (commit `2032256`) - ArgoCD ma `selfHeal: true`, więc sam live `kubectl patch` (próbowany chwilę wcześniej) został cofnięty automatycznie, dopóki git się nie zgadzał.
 - Zweryfikowano po poprawce: `HTTP 200` na `/api/main/home`, `/pictures/`, `/avatars/` (błędy `500` na gołych katalogach to normalne zachowanie aplikacji przy braku nazwy pliku, nie problem sieciowy). Rolling restart obu podów backendu bez błędów, ArgoCD `Synced`/`Healthy`.
 - Wniosek na przyszłość: przy pisaniu polityk dla kolejnych appek (bot/backup/postgres/redis) weryfikować rzeczywisty ruch bezpośrednio w żywym podzie (`kubectl exec ... cat <config>` / logi), nie wnioskować z pośrednich sygnałów jak zmienne CORS czy nazwy hostów ingress.
+
+### 2026-09-30 - SHR-K8S-002 (część 2): boty, backup i datastore'y sandboxa/mata24
+
+- Tym razem ruch zweryfikowany wprost w źródle (repo `yalquo-bot`, repo `mata24-bot`, `backup-script-configmap.yaml`) przed napisaniem polityk - wniosek z incydentu trippics wyżej.
+- `yalquo-bot`: osobny `NetworkPolicy` w `apps/yalquo-bot/`. Kluczowe odkrycie z kodu: bot woła własne API mata24... nie, yalquo (`app.yalquo-api.base-url`) domyślnie pod publicznym `https://api.yalquo.infra.trippics.pl` - **przez ingress, nie in-cluster Service** ("boty działają wyłącznie przez HTTP, jak prawdziwy klient") - więc to egress do internetu (443), nie do poda backendu bezpośrednio. Ma też własną bazę (`YALQUO_BOT_DB_URL`, osobną od `yalquo`, ale na tym samym serwerze `yalquo-postgres`) i pobiera zdjęcia z `cdn.yalquo.pl` (też 443). Brak MinIO/S3 w kodzie.
+- `mata24-bot`: analogicznie zweryfikowane w źródle (`.env.example`, `src/api.ts`) - w przeciwieństwie do yalquo-bota, ten woła backend **in-cluster** (`http://mata24-backend.mata24.svc.cluster.local:8080`) i łączy się bezpośrednio z `mat1` (main-db) przez `pg`. Nowy `apps/mata24-bot/networkpolicy.yaml`, `ingress: []` (nic do niego nie woła).
+- `yalquo-postgres` / `yalquo-redis` / `yalquo-db-backup`: trzy polityki w jednym pliku `apps/yalquo-postgres/networkpolicy.yaml` (ingress-only dla obu datastore'ów, ingress+egress dla backupu - pg_dump lokalnie + rclone do Google Drive na 443). `yalquo-redis` nie jest w GitOps (ad-hoc `kubectl`, komentarz "jednorazowy Redis" w kodzie) - polityka i tak trzymana w repo, przy pozostałych datastore'ach sandboxa.
+- Powtórzony problem ze stabilnością labeli: `yalquo-db-backup` CronJob też nie miał `app:` (tylko zmienny `job-name`) - dodano, jak wcześniej przy `mata24-bot`.
+- Weryfikacja: commit `044c667`, wszystkie 5 dotkniętych aplikacji ArgoCD `Synced`/`Healthy`. Wymuszone NOWE połączenia (nie tylko już otwarte): rolling restart `yalquo-backend` i `yalquo-bot`, ręcznie odpalony `kubectl create job --from=cronjob` dla `mata24-bot` (log: `tick_idle`, bez błędu połączenia) i `yalquo-db-backup` (log: `Backup bazy yalquo zakonczony OK` - pg_dump + gpg + upload na Google Drive przeszły). Panel operatora `yalquo-bot` (`yalquo-bot.infra.trippics.pl`) odpowiada `302` (przekierowanie do logowania, nie timeout). Restarty wszystkich podów: `0`.
+
+Pozostaje do zrobienia (poza zakresem SHR-K8S-002):
+- Namespace `databases`/`redis`/`minio`/`vault` mają już ingress-only `NetworkPolicy` sprzed audytu - egress z tych namespace'ów (np. `main-db-backup`, backup MinIO) nie był w zakresie audytu (namespace'y `trippics`/`yalquo`/`mata24`/`sandbox`) i zostaje nietknięty.
+- Jednorazowe/testowe pody w `sandbox` (`yalquo-bot-operations-constraint-fix`, ewentualne przyszłe `curltest`) - celowo pominięte, nie są stałym workloadem.
+- Namespace `yalquo` (docelowy, pusty) i rozszerzenie `main-db-allow-consumers`/`redis-allow-consumers` o niego po migracji z `sandbox` - jak w poprzednim wpisie.
+
+### 2026-09-30 - TRI-SEC-001: koniec wysyłki tymczasowego hasła e-mailem
+
+- Zakres: repozytorium `trippics-backend` (lokalnie sklonowane jako `new-trippics` - to ten sam repo/remote, HEAD zgodny z wdrożonym obrazem).
+- Doprecyzowanie względem opisu findingu: `sendPasswordResetLink` (reset "zapomniałem hasła", token ważny 1h) **już działał poprawnie** i nie wymagał zmian - tylko nie był jedynym miejscem generującym hasło. Podatność była węższa niż cały flow resetu: dotyczyła wyłącznie `loginOrRegisterViaFacebook` (zakładanie konta przez Facebook), które generowało 7-znakowe tymczasowe hasło i wysyłało je w treści maila (`sendFacebookWelcomeEmail`). Analogiczny `loginOrRegisterViaGoogle` już wcześniej robił to bezpiecznie - losowe 24-znakowe hasło, zahashowane, nigdzie nieujawniane, bo logowanie odbywa się wyłącznie przez Google.
+- Poprawka: `loginOrRegisterViaFacebook` dostał dokładnie ten sam wzorzec co Google (hasło 24 znaki, `UUID.randomUUID()`, nigdy nieeksponowane) - usunięto wywołanie `sendFacebookWelcomeEmail` oraz samą (teraz martwą) metodę z `EmailService`/`EmailServiceImpl`. Powiadomienie do admina o nowym koncie zostaje (nie zawiera PII/sekretów).
+- Weryfikacja: `mvn clean compile` lokalnie (`BUILD SUCCESS`, 125 plików) przed pushem. Commit `5bc2379`, zbudowany przez Jenkins (build #33, maven+kaniko), obraz wdrożony przez GitOps (`323bbe0` w `local-kubernetes-cluster-definition`, ArgoCD `Synced`/`Healthy`). Oba nowe pody `Ready`, restarty `0`. Realny ruch przez ingress (`www.trippics.pl/api/main/home`) nadal `200` po deployu.
+- Poza zakresem tej poprawki: `sendActivationEmail` (link aktywacyjny, nie hasło) i `sendPasswordResetLink` (token, nie hasło) nie wymagały zmian - już zgodne z rekomendacją audytu.
+
+### 2026-09-30 - Mata24: sekcja polityki prywatności dla aplikacji mobilnej i link usuwania konta (zgodność z Google Play)
+
+- Nie jest to naprawa konkretnego findingu z tego audytu - zgłoszone przez użytkownika osobno, przy okazji przeglądu zgodności polityki prywatności mata24 z zasadami danych użytkownika Google Play (wymagania sekcji Data Safety/Account Deletion w Konsoli Play). Dotyczy tych samych obszarów co wiersze "Usunięcie konta" i "Mobile permissions/telemetry" w sekcji 7.3 tego raportu.
+- Ustalenie: `mata24-mobile/src/screens/profile/ProfileScreen.tsx` linkował do `/terms` i `/privacy`, ale nie miał żadnej opcji usunięcia konta - Google Play wymaga wprost, żeby taka opcja była łatwa do znalezienia w samej aplikacji, nie tylko na stronie WWW. Backend (`UserService.anonymizeUser` w `matematicon`) i web (`/profile`) już to miały; brakowało wejścia z mobile.
+- Ustalenie: polityka prywatności (`mata24-frontend/src/app/terms/privacypolicy/privacy.component.html`) opisywała wyłącznie dane/cookies webowe; nie tłumaczyła sposobu przechowywania tokenu w aplikacji mobilnej (Keychain/EncryptedSharedPreferences zamiast cookies), natywnego logowania Google Sign-In, uprawnień aparat/galeria ani retencji danych po usunięciu konta (usunięcie = anonimizacja, nie twardy DELETE - historia nauki zostaje bez powiązania z osobą, żeby nie osierocać kont dzieci powiązanych przez `parent_id`).
+- Zweryfikowane w kodzie (nie zgadywane): `mata24-mobile/package.json` nie ma żadnego SDK analitycznego, reklamowego ani crash-trackingu firm trzecich; `app.json` ma już poprawne opisy zgód systemowych na `photosPermission`/`cameraPermission` i jawne `microphonePermission: false`.
+- Poprawka: link "Usuń konto" w `ProfileScreen.tsx` (otwiera `mata24.pl/profile` w przeglądarce urządzenia, gdzie usuwanie/anonimizacja już działa). Polityka prywatności: nowa sekcja 9 "Aplikacja mobilna" (brak SDK analitycznych/reklamowych/trackingowych, brak trwałych identyfikatorów urządzenia, token w bezpiecznym magazynie systemowym, Google Sign-In natywny, uprawnienia aparat/galeria tylko przy zmianie awatara, link usuwania konta) oraz akapit w sekcji 5 tłumaczący anonimizację po usunięciu konta. Renumeracja sekcji 9-12 na 10-13.
+- Commity: `mata24-frontend` `9098c29` (polityka), `mata24-mobile` `0e3c4cd` (link usuwania konta), oba wypchnięte na `main`.
+
+Pozostaje do zrobienia (poza zakresem tej poprawki):
+- `mata24-frontend` trafi na produkcję przy najbliższym deployu (Jenkins/ArgoCD) - nie zweryfikowano jeszcze na żywym `mata24.pl`.
+- `mata24-mobile` wymaga nowego builda APK/AAB w Jenkinsie (job "Mata24.pl/mata24-mobie"), żeby link "Usuń konto" trafił do faktycznej aplikacji na telefonach/Play Store - nie zbudowano jeszcze w tej sesji.
+- Sekcja "Bezpieczeństwo danych" w Konsoli Google Play (deklaracje zbierania/udostępniania danych) nie została zaktualizowana - to działanie poza repozytoriami kodu, do wykonania ręcznie w konsoli.
