@@ -34,6 +34,7 @@ Ocena RODO jest nierówna. Trippics i Mata24 mają techniczne endpointy eksportu
 | TRI-SEC-001 | ✅ Naprawione (Facebook signup już nie wysyła hasła mailem - losowe, nigdzie nieujawniane hasło jak przy Google; zbudowane i wdrożone) | 2026-09-30 |
 | SHR-K8S-002 | ✅ Naprawione dla namespace'ów w zakresie audytu (`trippics`, `mata24`, `sandbox`/yalquo) - default-deny + allow-list `NetworkPolicy` per-appka, zweryfikowane świeżymi połączeniami | 2026-09-30 |
 | MAT-RODO-001 | ✅ Naprawione (redakcja PII w crash reports po stronie mobile i backendu, brak podwójnego logowania treści, retencja 30 dni włączona na produkcji) | 2026-09-30 |
+| SHR-SUP-001 | 🟡 Częściowo (`mata24-bot` przypięty do immutable digestu, CI aktualizuje go automatycznie; pozostałe workloady nadal na skróconym SHA, nie digest) | 2026-09-30 |
 
 ## 2. Zakres i metodologia
 
@@ -265,6 +266,7 @@ Legenda: ✅ wykonane, ◐ częściowe, ❌ niewykonane / brak bezpiecznego dowo
 - **Rozwiązanie:** budować raz, podpisywać/atestować, wdrażać wyłącznie po digest; usunąć `latest`; weryfikować podpis admission policy.
 - **Właściciel:** CI/CD + Platform.
 - **Termin:** `latest` ≤7 dni, pozostałe ≤60 dni.
+- **Status realizacji:** 🟡 Częściowo - `mata24-bot` (jedyny znaleziony przypadek `:latest` w deklaracji live workloadu) naprawiony 2026-09-30, szczegóły w sekcji 13. Pozostałe workloady (pinowane do skróconego SHA, nie do digestu) wciąż otwarte, termin 60 dni.
 
 ### SHR-CICD-001 — brak dowodu ustawień GitHub i provenance
 
@@ -566,3 +568,13 @@ Pozostaje do zrobienia (poza zakresem tej poprawki):
 - Świadomie pominięte: formalny opt-out z raportowania awarii. Dane są już zredagowane (bez PII w praktyce), służą wyłącznie stabilności aplikacji (uzasadniony interes), a dodanie przełącznika w ustawieniach dla mało używanej aplikacji bez panelu administracyjnego crash reportów uznano za nieproporcjonalny nakład względem ryzyka - do rewizji, jeśli DPO/audyt prawny stwierdzi inaczej.
 - Weryfikacja: `npx jest crashReporting` (11/11 testów), `npx tsc --noEmit` (czysto) w `mata24-mobile` przed pushem. Commity: `mata24-mobile` `46ee8f8`, `mata24-frontend` `61eba07`, `local-kubernetes-cluster-definition` `a22d86b` (ten ostatni rebase'owany na świeży `origin/main`, bo równoległa sesja wypchnęła `323bbe0` w międzyczasie). Na żywo: `kubectl` potwierdza `APP_CLIENT_ERROR_REPORTS_RETENTION_ENABLED=true` w specyfikacji działającego poda, nowa rewizja `mata24-backend` wystartowała bez błędów (`Started MetematiconBackendApplication in 148s`, zgodne ze znanym czasem startu tego serwisu) i przejęła ruch. ArgoCD miga `Synced`/`OutOfSync` po deployu - potwierdzone jako już wcześniej istniejący, niezwiązany z tą zmianą efekt rozjazdu `spec.replicas` między Gitem a HPA (ten sam serwis ma za sobą setki takich przełączeń w historii `observedGeneration`), nie nowa regresja.
 - Pozostaje do zrobienia (poza zakresem tej poprawki): rzeczywisty pierwszy przebieg joba retencji nastąpi o 03:15 - nie zweryfikowano jeszcze logu potwierdzającego usunięcie; `mata24-mobile` wymaga nowego builda APK/AAB w Jenkinsie, żeby redakcja trafiła do faktycznej aplikacji na telefonach.
+
+### 2026-09-30 - SHR-SUP-001 (częściowo): mata24-bot przypięty do immutable digestu
+
+- Zakres: `local-kubernetes-cluster-definition` (`apps/mata24-bot/cronjob.yaml`), `mata24-bot` (`Jenkinsfile`).
+- Ustalenie: Jenkinsfile mata24-bot już budował i wypychał obraz pod dwoma tagami (`:<8-znakowy SHA>` i `:latest`), ale manifest GitOps celowo zostawał na `:latest` - komentarz w kodzie tłumaczył to decyzją operacyjną ("suspend to nie deploy per commit"), co było nietrafionym uzasadnieniem (użycie SHA/digestu w referencji obrazu nie ma związku z tym, czy CronJob jest wstrzymany).
+- Digest ustalony bez zgadywania: `kubectl get pods -n mata24 -l app=mata24-bot -o jsonpath='...imageID'` na trzech ostatnich uruchomieniach joba dał spójny wynik `sha256:9b58b4ca61ea...`, zgodny z HEAD repo `mata24-bot` (`79e15aca`, ten sam commit co w tabeli audytowanych commitów w sekcji 12).
+- Poprawka: `cronjob.yaml` pinowany do `ghcr.io/leszekbednorz/mata24-bot@sha256:9b58b4ca...` zamiast `:latest`. Jenkinsfile: `--digest-file` w kroku kaniko + nowy stage "Update Manifest" (analogiczny do już istniejącego w `matematicon`/mata24-backend) - na każdym buildzie z `main` automatycznie podmienia digest w GitOps przez `sed` + commit + push, więc pin nie będzie się starzał przy kolejnych wydaniach bota.
+- Weryfikacja na żywo: `kubectl -n argocd annotate application mata24-bot argocd.argoproj.io/refresh=hard`, `Synced`/`Healthy` na rewizji zgodnej z nowym commitem, `kubectl get cronjob -o jsonpath='...image'` potwierdza digest na żywym zasobie. Zmiana nie wymagała restartu niczego na żywo - CronJob użyje nowego obrazu przy najbliższym zaplanowanym uruchomieniu (co 10 min).
+- Commity: `local-kubernetes-cluster-definition` `c1d9572`, `mata24-bot` `47dbdce`.
+- Pozostaje do zrobienia (poza zakresem tej poprawki): pozostałe workloady (`mata24-backend`, `mata24-frontend`, `trippics-*`, `yalquo-*`) nadal referencjonują skrócony SHA tagu, nie digest - tag SHA jest w praktyce prawie tak dobry jak digest (nowy push pod ten sam SHA-tag nie powinien się zdarzyć, bo tag pochodzi z commit hasha), ale audyt formalnie wymaga `@sha256:`; ujednolicenie wszystkich pipeline'ów zostaje na termin 60-dniowy.
