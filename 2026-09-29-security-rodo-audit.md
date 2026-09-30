@@ -35,6 +35,7 @@ Ocena RODO jest nierówna. Trippics i Mata24 mają techniczne endpointy eksportu
 | SHR-K8S-002 | ✅ Naprawione dla namespace'ów w zakresie audytu (`trippics`, `mata24`, `sandbox`/yalquo) - default-deny + allow-list `NetworkPolicy` per-appka, zweryfikowane świeżymi połączeniami | 2026-09-30 |
 | MAT-RODO-001 | ✅ Naprawione (redakcja PII w crash reports po stronie mobile i backendu, brak podwójnego logowania treści, retencja 30 dni włączona na produkcji) | 2026-09-30 |
 | SHR-SUP-001 | 🟡 Częściowo (`mata24-bot` przypięty do immutable digestu, CI aktualizuje go automatycznie; pozostałe workloady nadal na skróconym SHA, nie digest) | 2026-09-30 |
+| YAL-RODO-002 | 🟡 Częściowo (samoobsługowe usunięcie konta w backendzie i UI, dokumentacja poprawiona; eksport danych wciąż brakuje) | 2026-10-01 |
 
 ## 2. Zakres i metodologia
 
@@ -222,6 +223,7 @@ Legenda: ✅ wykonane, ◐ częściowe, ❌ niewykonane / brak bezpiecznego dowo
 - **Rozwiązanie:** wdrożyć uwierzytelniony eksport oraz proces usunięcia/anonymizacji obejmujący treści, media, zgody, relacje bota i backup lifecycle; skorygować dokument do czasu wdrożenia.
 - **Właściciel:** Yalquo Backend/Product Privacy.
 - **Termin:** ≤60 dni; dokumentacja ≤7 dni.
+- **Status realizacji:** 🟡 Częściowo - usunięcie konta (backend + UI) i korekta dokumentacji naprawione 2026-09-30/10-01, szczegóły w sekcji 13. Uwierzytelniony eksport danych (GDPR data portability) wciąż nie istnieje - pozostaje otwarte.
 
 ### YAL-RODO-003 — retencja obejmuje tylko część danych bota i jest domyślnie wyłączona
 
@@ -340,13 +342,13 @@ Legenda: ✅ wykonane, ◐ częściowe, ❌ niewykonane / brak bezpiecznego dowo
 | Privacy policy / transparentność | Gap | YAL-RODO-001. |
 | Cookies/analytics/tracking | Partial | Dokument deklaruje brak cookies trackingowych; brak dynamicznej weryfikacji. |
 | Minimalizacja/retencja | Partial | Prywatność profilu i częściowa retencja bota; YAL-RODO-003. |
-| Dostęp/poprawienie/przenoszenie/usunięcie | Gap | Edycja profilu obecna; brak eksportu/usunięcia konta. |
+| Dostęp/poprawienie/przenoszenie/usunięcie | Partial-positive | Edycja profilu i usunięcie konta (anonimizacja, `DELETE /api/me` + UI) od 2026-10-01; eksport danych (przenoszenie) wciąż brakuje. |
 | Sprzeciw/ograniczenie | Needs evidence | Opisane w polityce, brak procesu technicznego. |
 | Procesorzy/transfery | Gap | Kategorie ogólne i placeholder transferowy, bez listy rzeczywistych procesorów. |
 | Privacy by design/default | Partial-positive | Ustawienia publiczności profilu i audyt zgód; należy potwierdzić bezpieczne defaulty live. |
 | Naruszenia/DPIA | Needs evidence | Brak dowodu planu IR/DPIA. |
 | Mobile permissions/telemetry | Not assessed | `yalquo-mobile` jest puste. |
-| Usunięcie konta | Missing | YAL-RODO-002. |
+| Usunięcie konta | Present | Od 2026-10-01: `DELETE /api/me` (anonimizacja, potwierdzenie hasłem) + UI w ustawieniach profilu. Eksport danych z YAL-RODO-002 wciąż brakuje. |
 
 ### 7.3 Mata24
 
@@ -578,3 +580,16 @@ Pozostaje do zrobienia (poza zakresem tej poprawki):
 - Weryfikacja na żywo: `kubectl -n argocd annotate application mata24-bot argocd.argoproj.io/refresh=hard`, `Synced`/`Healthy` na rewizji zgodnej z nowym commitem, `kubectl get cronjob -o jsonpath='...image'` potwierdza digest na żywym zasobie. Zmiana nie wymagała restartu niczego na żywo - CronJob użyje nowego obrazu przy najbliższym zaplanowanym uruchomieniu (co 10 min).
 - Commity: `local-kubernetes-cluster-definition` `c1d9572`, `mata24-bot` `47dbdce`.
 - Pozostaje do zrobienia (poza zakresem tej poprawki): pozostałe workloady (`mata24-backend`, `mata24-frontend`, `trippics-*`, `yalquo-*`) nadal referencjonują skrócony SHA tagu, nie digest - tag SHA jest w praktyce prawie tak dobry jak digest (nowy push pod ten sam SHA-tag nie powinien się zdarzyć, bo tag pochodzi z commit hasha), ale audyt formalnie wymaga `@sha256:`; ujednolicenie wszystkich pipeline'ów zostaje na termin 60-dniowy.
+
+### 2026-09-30/10-01 - YAL-RODO-002 (częściowo): samoobsługowe usunięcie konta w Yalquo
+
+- Zakres: `yalquo-backend` (nowy endpoint + serwis), `yalquo-frontend` (UI), dokumenty prawne w obu repo.
+- Mapa modelu danych zrobiona przed kodem (subagent Explore): żadna encja w `yalquo-backend` nie ma kaskady z `User`, a `Achievement.createdBy`/`ChallengeProposalComment.author`/`ChallengeProposalVote.user` są NOT NULL i wskazują na treść współdzieloną z innymi użytkownikami (dyskusje w Kuźni, denormalizowane liczniki głosów/popularności) - twardy DELETE osierociłby te rekordy albo zepsuł dane innych osób. Ten sam wniosek co wcześniej w Trippics/Mata24 (patrz notatka w sekcji o MAT-RODO-001 wyżej i wpisy pamięci projektowej): anonimizacja, nie fizyczny DELETE.
+- Backend (`UserService.removeAccount`, `MeApiController` `DELETE /api/me`): wymaga potwierdzenia aktualnym hasłem (chroni przed usunięciem konta przez przejętą/porzuconą sesję), blokuje samodzielne usunięcie konta administratora, nadpisuje login/e-mail losowym UUID (nie surowym id - nie ujawnia że konto istniało), czyści PII, `authVersion++` + `refreshTokenRepository.deleteByUser` (natychmiastowe unieważnienie WSZYSTKICH sesji - ten wzorzec istniał już w `AdminIdentityService` dla akcji administratora, ale nie w self-service `changePassword`, co było niespójnością zamkniętą przy okazji), usuwa avatar z magazynu plików, czyści IP/User-Agent z historii zgód i akceptacji regulaminu (same zgody/akceptacje zostają jako dowód historyczny - `ConsentEvent` jest z założenia append-only).
+- Brakujący prymityw odkryty po drodze: `StorageService` (abstrakcja dysk/S3-MinIO) miała `store()` i `resolveUrl()`, ale **żadnej metody `delete()`** - w całym kodzie (też przy `ChallengeImage`/`ChallengeAttachment`) usunięcie wiersza z bazy nigdy nie usuwało pliku z magazynu. Dodano `StorageService.delete()` (obie implementacje) i użyto jej dla avatara; pozostałe miejsca z tym samym brakiem zostają nietknięte (poza zakresem tej poprawki).
+- Frontend: sekcja "Strefa zagrożenia" na `/profil` (formularz z polem hasła, potwierdzenie, komunikat o nieodwracalności), `AuthService.deleteAccount()` czyści sesję i przekierowuje na `/konto` po sukcesie - ten sam wzorzec co `logout()`.
+- Dokumentacja: poprawiony fałszywy zapis w `yalquo-frontend/legal/polityka-prywatnosci.md:74` (dokładnie ten cytowany w opisie findingu) który twierdził, że usunięcie konta jest "dostępne samodzielnie w ustawieniach Konta", mimo że funkcja nie istniała. Autorytatywne dokumenty w `yalquo-backend/src/main/resources/legal/` (regulamin.md, polityka-prywatnosci.md) rozszerzone o opis nowej ścieżki i tego, co faktycznie się dzieje przy usunięciu (anonimizacja, nie DELETE; treści współdzielone zostają).
+- **Decyzja o wersjonowaniu dokumentów prawnych - świadomie przedyskutowana z użytkownikiem**: `LegalDocumentBootstrap` (który publikuje `TERMS_VERSION`/`PRIVACY_VERSION` jako nowe wiersze `LegalDocument`) jest wyłączony na produkcji (`app.legal.bootstrap-enabled=false`, brak override w k8s) - realna publikacja nowej wersji dzieje się ręcznie przez panel admina (`AdminLegalDocumentController`/`publishNewVersion`). Podbicie wersji regulaminu (1.3→1.4) i polityki (1.4→1.5) w kodzie jest więc bezpieczne samo w sobie - wymuszenie ekranu ponownej akceptacji regulaminu u wszystkich userów (`legalGuard` w `yalquo-frontend` przekierowuje na `/akceptacja-regulaminu` dopóki wersja się nie zgadza) nastąpi dopiero gdy administrator faktycznie opublikuje nową wersję przez panel, nie automatycznie przy tym wdrożeniu.
+- Weryfikacja: `mvn test` w `yalquo-backend` - 242/242 (10 nowych testów `removeAccount`: błędne hasło, blokada admina, pełna anonimizacja + inwalidacja sesji, pominięcie usuwania avatara gdy go nie było; naprawiono też 2 istniejące testy zepsute nowym wymaganym override'em `StorageService.delete()`). `npx ng build` w `yalquo-frontend` - czysto (tylko istniejące wcześniej ostrzeżenia budżetu CSS).
+- Commity: `yalquo-backend` `bf13106` (feature) + `2c2568d` (dokumenty prawne), `yalquo-frontend` `a671c3f` (UI + korekta draftu polityki).
+- Pozostaje do zrobienia (poza zakresem tej poprawki, wciąż otwarta część YAL-RODO-002): uwierzytelniony eksport danych (prawo do przenoszenia) - nie zaimplementowany. Publikacja nowych wersji dokumentów prawnych przez panel admina - do ręcznego wykonania przez użytkownika, kiedy zdecyduje.
