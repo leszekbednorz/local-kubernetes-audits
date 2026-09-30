@@ -33,6 +33,7 @@ Ocena RODO jest nierówna. Trippics i Mata24 mają techniczne endpointy eksportu
 | SHR-K8S-001 | 🟡 Częściowo (automount tokenu ServiceAccount wyłączony na wszystkich workloadach; pełny `securityContext` non-root w toku) | 2026-09-30 |
 | TRI-SEC-001 | ✅ Naprawione (Facebook signup już nie wysyła hasła mailem - losowe, nigdzie nieujawniane hasło jak przy Google; zbudowane i wdrożone) | 2026-09-30 |
 | SHR-K8S-002 | ✅ Naprawione dla namespace'ów w zakresie audytu (`trippics`, `mata24`, `sandbox`/yalquo) - default-deny + allow-list `NetworkPolicy` per-appka, zweryfikowane świeżymi połączeniami | 2026-09-30 |
+| MAT-RODO-001 | ✅ Naprawione (redakcja PII w crash reports po stronie mobile i backendu, brak podwójnego logowania treści, retencja 30 dni włączona na produkcji) | 2026-09-30 |
 
 ## 2. Zakres i metodologia
 
@@ -164,6 +165,7 @@ Legenda: ✅ wykonane, ◐ częściowe, ❌ niewykonane / brak bezpiecznego dowo
 - **Rozwiązanie:** allow-list pól, redakcja tokenów/e-maili/URL query przed wysłaniem i ponownie na serwerze, nie logować pełnego komunikatu, ustalić krótki TTL i podstawę/cel, udokumentować telemetrykę oraz zapewnić opt-out, gdy wymagany.
 - **Właściciel:** Mata24 Mobile/Backend + Privacy.
 - **Termin:** ≤7 dni.
+- **Status realizacji:** ✅ Naprawione 2026-09-30 - szczegóły w sekcji 13.
 
 ### TRI-SEC-002 — upload opiera walidację typu na deklaracji klienta
 
@@ -553,3 +555,14 @@ Pozostaje do zrobienia (poza zakresem tej poprawki):
 - `mata24-frontend` trafi na produkcję przy najbliższym deployu (Jenkins/ArgoCD) - nie zweryfikowano jeszcze na żywym `mata24.pl`.
 - `mata24-mobile` wymaga nowego builda APK/AAB w Jenkinsie (job "Mata24.pl/mata24-mobie"), żeby link "Usuń konto" trafił do faktycznej aplikacji na telefonach/Play Store - nie zbudowano jeszcze w tej sesji.
 - Sekcja "Bezpieczeństwo danych" w Konsoli Google Play (deklaracje zbierania/udostępniania danych) nie została zaktualizowana - to działanie poza repozytoriami kodu, do wykonania ręcznie w konsoli.
+
+### 2026-09-30 - MAT-RODO-001: redakcja PII w crash reports, koniec dublowania w logu, włączona retencja
+
+- Zakres: `mata24-mobile` (`src/lib/crashReporting.ts`), `matematicon` (kod redakcji i joba retencji już istniał w repo, ale nie był wdrożony/włączony na produkcji), `local-kubernetes-cluster-definition` (`apps/mata24-backend/deployment.yaml`).
+- Ustalenie przy starcie pracy: backendowa połowa tego findingu **już była zaimplementowana** w `matematicon` (`ClientErrorReportService.record` redaguje przez `LogRedaction.redact` przed zapisem, nie loguje już pełnego komunikatu ponownie, `ClientErrorReportRetentionJob` czyści rekordy starsze niż 30 dni) - prawdopodobnie praca równoległej sesji nad tym samym audytem, nieudokumentowana dotąd w tym pliku. Komentarz w `ClientErrorReportService.java` twierdził jednak, że "mobile już redaguje po swojej stronie (crashReporting.ts)" - **nieprawda**: `crashReporting.ts` wysyłało surowy `message`/`stack` bez żadnej redakcji, testy (`crashReporting.test.ts`) to potwierdzały (`expect(body.message).toBe('cos sie zepsulo')` na surowym tekście). Job retencji miał też `@ConditionalOnProperty(...havingValue = "true")` bez odpowiadającej zmiennej środowiskowej w `deployment.yaml` - czyli de facto wyłączony na produkcji mimo gotowego kodu.
+- Poprawka mobile: `redact()` w `crashReporting.ts` - lustrzane odbicie `LogRedaction.java` (query string, JWT, e-mail, długi token jako rezerwa), stosowane do `message` i `stack` przed `fetch` do `/pub/mobile/crash-reports`. Nowe testy jednostkowe (redakcja e-maila/JWT/query stringu/długiego tokenu, przepuszczenie `undefined`, oraz test end-to-end że `reportError` faktycznie wysyła już zredagowaną treść).
+- Poprawka infrastruktury: `APP_CLIENT_ERROR_REPORTS_RETENTION_ENABLED: "true"` dodane do `apps/mata24-backend/deployment.yaml` - włącza już istniejący, wcześniej nieaktywny job retencji (30 dni, cron `0 15 3 * * *`).
+- Polityka prywatności mata24 (`privacy.component.html`, sekcja 9 "Aplikacja mobilna") doprecyzowana: poprzedni zapis "brak narzędzi do raportowania awarii" mówił wyłącznie o braku SDK firm trzecich (Sentry/Crashlytics), a nie oddawał faktu, że aplikacja wysyła własne raporty awarii do własnego backendu - dodany osobny akapit: co jest zbierane, że jest redagowane przed i po wysłaniu, oraz że retencja wynosi 30 dni. To domyka "udokumentować telemetrykę" z rekomendacji findingu.
+- Świadomie pominięte: formalny opt-out z raportowania awarii. Dane są już zredagowane (bez PII w praktyce), służą wyłącznie stabilności aplikacji (uzasadniony interes), a dodanie przełącznika w ustawieniach dla mało używanej aplikacji bez panelu administracyjnego crash reportów uznano za nieproporcjonalny nakład względem ryzyka - do rewizji, jeśli DPO/audyt prawny stwierdzi inaczej.
+- Weryfikacja: `npx jest crashReporting` (11/11 testów), `npx tsc --noEmit` (czysto) w `mata24-mobile` przed pushem. Commity: `mata24-mobile` `46ee8f8`, `mata24-frontend` `61eba07`, `local-kubernetes-cluster-definition` `a22d86b` (ten ostatni rebase'owany na świeży `origin/main`, bo równoległa sesja wypchnęła `323bbe0` w międzyczasie). Na żywo: `kubectl` potwierdza `APP_CLIENT_ERROR_REPORTS_RETENTION_ENABLED=true` w specyfikacji działającego poda, nowa rewizja `mata24-backend` wystartowała bez błędów (`Started MetematiconBackendApplication in 148s`, zgodne ze znanym czasem startu tego serwisu) i przejęła ruch. ArgoCD miga `Synced`/`OutOfSync` po deployu - potwierdzone jako już wcześniej istniejący, niezwiązany z tą zmianą efekt rozjazdu `spec.replicas` między Gitem a HPA (ten sam serwis ma za sobą setki takich przełączeń w historii `observedGeneration`), nie nowa regresja.
+- Pozostaje do zrobienia (poza zakresem tej poprawki): rzeczywisty pierwszy przebieg joba retencji nastąpi o 03:15 - nie zweryfikowano jeszcze logu potwierdzającego usunięcie; `mata24-mobile` wymaga nowego builda APK/AAB w Jenkinsie, żeby redakcja trafiła do faktycznej aplikacji na telefonach.
