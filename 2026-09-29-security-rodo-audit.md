@@ -458,3 +458,19 @@ Legenda: ✅ wykonane, ◐ częściowe, ❌ niewykonane / brak bezpiecznego dowo
 ---
 
 Raport nie zawiera sekretów, surowych logów, wartości ConfigMap/Secrets, prywatnych hostów/IP, kubeconfigów, pełnych odpowiedzi API ani fragmentów prywatnego kodu poza minimalnymi opisami ścieżek i linii.
+
+## 13. Log napraw
+
+### 2026-09-30 - MAT-SUP-001: usunięcie dumpów bazy z repo i historii Git
+
+- Zakres: repozytorium `matematicon` (Mata24), wszystkie 7 branchy (`main`, `admin-panel`, `develop`, `feature/oauth-google-facebook-login`, `mobile-android-prototype`, `openhands/campaign-key-attribution`, `openhands/marketing-analytics`).
+- Usunięto z całej historii Git (`git-filter-repo` na świeżym mirror clone + force-push do origin) 10 plików: 3 wskazane w audycie (`mat1_backup_20260723.sql`, `mata24_PROD_backup_20260723.sql`, `mata24_PROD_backup_20260725.sql`) oraz 7 dodatkowych dumpów znalezionych przy tej samej okazji (`mat1_backup_20241124.sql`, `mat1_backup_20241208.sql`, `mat1_backup_20250223.sql`, `mat1_backup_20260623-migration.sql`, `mat1_backup_20290223.sql`, `mat1_bck_230825.sql`, `test.sql`).
+- Zweryfikowano brak tych plików we wszystkich 203 commitach na wszystkich 7 branchach po przepisaniu historii.
+- Dodano wpisy do `.gitignore` (`*backup*.sql`, `*_bck_*.sql`, `/*.sql` w katalogu głównym), żeby zapobiec ponownemu wrzuceniu dumpu do repo.
+- Sprawdzono zawartość najnowszego dumpa (`mata24_PROD_backup_20260725.sql`) przed usunięciem: 55 rekordów z hashami haseł bcrypt i 36 z aktywnymi tokenami aktywacyjnymi (`authentication_key`, jednorazowy token aktywacji konta, kasowany po użyciu), ale wszystkie 59 kont miały puste lub `@example.com` adresy e-mail - brak realnych adresów e-mail w tym snapshocie.
+- Wykonano pełny lokalny backup repo sprzed przepisania historii, przechowywany poza SCM.
+
+Pozostaje do zrobienia (poza zakresem tej naprawy):
+- Unieważnienie `authentication_key`/`reset_token` w bazie produkcyjnej (SQL przygotowany, do wykonania przez zespół z dostępem do bazy).
+- Włączenie GitHub Secret Scanning i Push Protection dla repo `matematicon`.
+- Ocena, czy formalne zamknięcie zapisu incydentu jest wymagane, biorąc pod uwagę brak realnych adresów e-mail w ujawnionym dumpie.
